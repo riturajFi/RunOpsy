@@ -60,17 +60,35 @@ class GetFailedJobLogTool(BaseTool):
             owner, repo, pr_number = parse_pr_url(pr_url)
             pr = self._github_client.get_pull_request(owner, repo, pr_number)
             head_sha = pr["head"]["sha"]
+            head_branch = pr["head"]["ref"]
 
-            runs = self._github_client.list_workflow_runs(owner, repo)
-            matching_runs = [run for run in runs if run.get("head_sha") == head_sha]
+            pr_runs = self._github_client.list_workflow_runs(
+                owner,
+                repo,
+                params={"event": "pull_request"},
+            )
+            branch_runs = self._github_client.list_workflow_runs(
+                owner,
+                repo,
+                params={"branch": head_branch},
+            )
+            runs = self._dedupe_runs(pr_runs + branch_runs)
+            matching_runs = self._select_matching_runs(runs, pr_number=pr_number, head_sha=head_sha)
 
             if not matching_runs:
-                result = "No workflow run found for this PR head SHA."
+                result = (
+                    "No matching workflow run found for this PR. "
+                    f"Checked PR-linked, branch, and head SHA matches for head_sha={head_sha}."
+                )
                 self._handler._log(
                     {
                         "event": "tool_end",
                         "tool_name": self.name,
                         "output": result,
+                        "pr_number": pr_number,
+                        "head_sha": head_sha,
+                        "head_branch": head_branch,
+                        "runs_scanned": len(runs),
                     }
                 )
                 return result
@@ -114,6 +132,8 @@ class GetFailedJobLogTool(BaseTool):
                         "tool_name": self.name,
                         "repo": f"{owner}/{repo}",
                         "pr_number": pr_number,
+                        "head_sha": head_sha,
+                        "head_branch": head_branch,
                         "run_id_github": run["id"],
                         "job_id_github": job["id"],
                         "job_name": job["name"],
@@ -128,6 +148,10 @@ class GetFailedJobLogTool(BaseTool):
                     "event": "tool_end",
                     "tool_name": self.name,
                     "output": result,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "head_branch": head_branch,
+                    "runs_scanned": len(matching_runs),
                 }
             )
             return result
@@ -141,3 +165,51 @@ class GetFailedJobLogTool(BaseTool):
                 }
             )
             raise
+
+    @staticmethod
+    def _dedupe_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen_ids: set[int] = set()
+        deduped: list[dict[str, Any]] = []
+        for run in runs:
+            run_id = run.get("id")
+            if not isinstance(run_id, int) or run_id in seen_ids:
+                continue
+            seen_ids.add(run_id)
+            deduped.append(run)
+        return deduped
+
+    @staticmethod
+    def _select_matching_runs(
+        runs: list[dict[str, Any]],
+        *,
+        pr_number: int,
+        head_sha: str,
+    ) -> list[dict[str, Any]]:
+        prioritized: list[tuple[int, dict[str, Any]]] = []
+        for run in runs:
+            linked_prs = run.get("pull_requests") or []
+            linked_pr_numbers = {
+                pr.get("number")
+                for pr in linked_prs
+                if isinstance(pr, dict) and pr.get("number") is not None
+            }
+            score = 0
+            if pr_number in linked_pr_numbers:
+                score = 3
+            elif run.get("head_sha") == head_sha:
+                score = 2
+            elif run.get("event") == "pull_request":
+                score = 1
+
+            if score:
+                prioritized.append((score, run))
+
+        prioritized.sort(
+            key=lambda item: (
+                item[0],
+                int(item[1].get("run_number") or 0),
+                int(item[1].get("run_attempt") or 0),
+            ),
+            reverse=True,
+        )
+        return [run for _, run in prioritized]

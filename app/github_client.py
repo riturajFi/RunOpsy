@@ -74,8 +74,17 @@ class GitHubClient:
     def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict[str, Any]:
         return self.get_json(f"/repos/{owner}/{repo}/pulls/{pr_number}")
 
-    def list_workflow_runs(self, owner: str, repo: str) -> list[dict[str, Any]]:
-        payload = self.get_json(f"/repos/{owner}/{repo}/actions/runs", params={"per_page": 100})
+    def list_workflow_runs(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        query_params = {"per_page": 100}
+        if params:
+            query_params.update(params)
+        payload = self.get_json(f"/repos/{owner}/{repo}/actions/runs", params=query_params)
         return payload.get("workflow_runs", [])
 
     def list_run_jobs(self, owner: str, repo: str, run_id: int) -> list[dict[str, Any]]:
