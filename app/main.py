@@ -5,11 +5,13 @@ import time
 import uuid
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from requests import RequestException
 
 from app.analyzer import AnalysisOutcome, PRFailureAnalyzer
 from app.config import get_settings
+from app.frontend import render_home_page
 from app.github_client import GitHubAPIError
 from app.observability import configure_observability, log_event, record_analyze_metrics
 from app.otel_compat import trace
@@ -66,14 +68,9 @@ def _response_from_outcome(outcome: AnalysisOutcome) -> AnalyzeResponse:
     )
 
 
-@app.get("/")
-def root() -> dict[str, str]:
-    return {
-        "service": "Runopsy",
-        "docs": "/docs",
-        "health": "/health",
-        "analyze": "/api/v1/analyze",
-    }
+@app.get("/", response_class=HTMLResponse)
+def root() -> HTMLResponse:
+    return HTMLResponse(render_home_page())
 
 
 @app.get("/health", response_model=HealthResponse)
