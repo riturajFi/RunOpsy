@@ -7,14 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import Settings
-from app.otel_compat import OPENTELEMETRY_AVAILABLE, metrics, trace
+from app.otel_compat import OPENTELEMETRY_AVAILABLE, trace
 from app.request_context import get_request_id
 
 
 _INITIALIZED = False
-_REQUEST_COUNTER: Any = None
-_REQUEST_DURATION_HISTOGRAM: Any = None
-
 _STANDARD_LOG_RECORD_FIELDS = {
     "args",
     "asctime",
@@ -79,20 +76,11 @@ def log_event(logger: logging.Logger, level: int, message: str, **fields: Any) -
 
 
 def record_analyze_metrics(*, status_code: int, duration_ms: float) -> None:
-    attributes = {
-        "route": "/api/v1/analyze",
-        "status_code": str(status_code),
-    }
-    if _REQUEST_COUNTER is not None:
-        _REQUEST_COUNTER.add(1, attributes)
-    if _REQUEST_DURATION_HISTOGRAM is not None:
-        _REQUEST_DURATION_HISTOGRAM.record(duration_ms, attributes)
+    _ = status_code, duration_ms
 
 
 def configure_observability(settings: Settings) -> None:
     global _INITIALIZED
-    global _REQUEST_COUNTER
-    global _REQUEST_DURATION_HISTOGRAM
 
     if _INITIALIZED:
         return
@@ -121,12 +109,9 @@ def configure_observability(settings: Settings) -> None:
     try:
         from opentelemetry._logs import set_logger_provider
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-        from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -173,27 +158,6 @@ def configure_observability(settings: Settings) -> None:
             BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_endpoint))
         )
         trace.set_tracer_provider(tracer_provider)
-
-    metrics_endpoint = _resolve_signal_endpoint(
-        settings.otel_exporter_otlp_metrics_endpoint,
-        settings.otel_exporter_otlp_endpoint,
-        "v1/metrics",
-    )
-    if metrics_endpoint:
-        metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=metrics_endpoint))
-        meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-        metrics.set_meter_provider(meter_provider)
-
-        meter = metrics.get_meter(settings.otel_service_name)
-        _REQUEST_COUNTER = meter.create_counter(
-            "runopsy_requests_total",
-            description="Total analyze API requests.",
-        )
-        _REQUEST_DURATION_HISTOGRAM = meter.create_histogram(
-            "runopsy_request_duration_ms",
-            unit="ms",
-            description="Analyze API request duration in milliseconds.",
-        )
 
     _INITIALIZED = True
 
